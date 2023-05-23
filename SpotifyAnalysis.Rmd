@@ -1,31 +1,418 @@
 ---
-title: "SpotifyTrends"
-author: "Varun Divi"
-date: '2023-05-23'
+title: "Final Paper"
+author: "STOR 320.01 Group 3 "
+date: "`r format(Sys.time(), '%B %d, %Y')`"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=FALSE, warning = F}
 knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(fmsb)
+library(gridExtra)
+library(modelr)
+library(knitr)
+library(Ecdat)
+library(xtable)
+library(gganimate)
+library(reshape2)
+library(pscl)
+library(kableExtra)
+library(caret)
+library(glmnet)
+options(knitr.table.format = "latex")
+
 ```
 
-## R Markdown
+# INTRODUCTION
+Music stands as one of the tenets of human ingenuity and creativity– we communicate, entertain, and even capitalize on music. In the past decade, the last of those has been explored more thoroughly than the others. The advent of music streaming made it much easier for companies like Apple Music, Tidal, and Spotify to see large profits. Our group decided to look into data from one of these companies providing streaming services, Spotify, which was the earliest of the aforementioned subscription based services to come on the scene. Spotify features millions of songs across every genre imaginable, over the entire lifetime of the music industry, thus providing the perfect backdrop to do in depth analysis on modern music.
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+The dataset our group explored has a little over 170,000 songs and 17 different predictors. The oldest songs in the dataset are from as early as 1920, and the newest songs are from 2020. Since Spotify is always expanding its library, there is always new songs to be added for further analysis. Given the breadth of the dataset and how many years of data are available, our group’s primary question for the dataset is quite general: how has music’s sound evolved over time? Music sound has clearly changed across decades, such as the transition from the 70s with its notorious hard rock style, to the 80s pop and synth-inspired music. The music that we grew up with often “feels” very different from the music our parents listened to, but why? Attributing these differences to a general change in genre would be overlooking the complexities and nuances of music. We attempt to formalize how music has changed over the past century based on quantifiable information like song valence, acousticness, and tempo. 
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+Our group was also interested in music popularity.  The dataset provided how popular a song was at present (2020 was the current year for the dataset). This led us to question whether we can predict the popularity of a song based on a variety of musical characteristic predictors. Answering these questions could inform us of how the most popular and lucrative musicians in an already extremely profitable field, are able to create three minutes of media that can gross millions of dollars per year over the span of decades, and perhaps provide future artists with the tools to thrive in a service oriented world.
 
-```{r cars}
-summary(cars)
-library(ggplot2)
+
+
+# DATA
+
+Our data was compiled by data.world user Bapiste Mansire. Mansire a current employee at Ippon Technologies, a technology consulting firm. Unfortunately, we do not have the education of Bapiste Mansire however the data was pulled directly from Spotify via api. Therefore, although we are unable to verify the credentials on the source, we trust that the data is raw data from Spotify. The data set contains over 170,000 rows with data from each year (1921 to 2020). The data set contains 19 rows consisting of double, character, and binary variables. Below is the first 10 rows of the data. 
+
+```{r, echo = F, warning = F, message = F}
+#original data set without any change
+music = read.csv("C:/Users/varun/Downloads/music.csv")
+kbl(head(music,10)
+) %>%
+  kable_minimal() %>% kable_styling(latex_options="scale_down")
 ```
 
-## Including Plots
+After cleaning the data, we found that there was not a single missing value in our data set, confirming the usage of a Spotify api. A few changes were made to the data set for the sake of convenience and further investigation. The data was condensed from 19 variables to 13 variables with the addition 2 more modified variables. Duration_ms was converted from milliseconds to minutes to reduce the size of values when plotting. A new decade variable was created to aggregate data on a decade to decade basis. The data for the year 202 was removed because it introduced potential skew that would interfere with model creation. 
 
-You can also embed plots, for example:
+### Cleaning Data
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r, echo = F, warning = F, message = F}
+music2 = music %>%
+  na.omit() %>% mutate(duration_ms = duration_ms / 60000) %>% rename(duration_min = duration_ms) %>% mutate(artists = str_replace_all(artists, "\\[|\\]|'",""))%>%
+  filter(year <= 2019) %>% mutate(decade = (year %/% 10)*10) %>% group_by(year) %>% mutate(sum = sum(popularity), prop_pop = 100*(popularity/sum(popularity))) %>% ungroup() %>%
+  select(year, decade, popularity, prop_pop, valence, danceability, duration_min, energy, explicit, instrumentalness, liveness, loudness, speechiness, tempo, acousticness)
+
+
+kbl(head(music2, 10)) %>%
+  kable_minimal() %>% kable_styling(latex_options="scale_down")
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+### Odd Cases
+```{r}
+music = read.csv("C:/Users/varun/Downloads/music.csv")
+
+author = str_replace_all(music$artists, "\\[|\\]|'","")
+music %>% mutate(artists = author) %>%
+  filter(name == "Diamonds") %>%
+  filter(artists == "Rihanna") %>%
+  select(name, artists, release_date, popularity)
+```
+When analyzing the raw data, we found that there are instances of songs with identical names, artists and release date yet have a different popularity. Our best guess as to which this might occur is that the song could be released in different languages. As for songs with different release dates, we believe that the artist might have rereleased their song. Regardless of the reason, we decided to filter out songs with identical names, artists and release date.
+
+### Popularity problem
+Upon initial analysis of popularity, we noticed that the popularity variable displayed strange distribution. According to Spotify's API dictionary, popularity is measured based on the volume and **recency** of streams. This introduces a new problem in using the popularity variable since popularity will naturally increase as the rececny of the song increases. The popularity variable is volatile and changes based on when the data was pulled. If the data set had included total streams, it might have been a better metric for popularity. 
+  
+To solve this issue, a new variable was created called prop_pop. This variable is the popularity proportion of a song in relation to the sum of popularity for the year. Taking the proportion reduces bias towards songs that released more recently by evaluating a song's popularity among other songs released in the same year. The popularity proportion was multiplied by 100 so that we weren't working with very small integers and instead worked with percentages. Based on the plot below, there are obviously still some problems with using popularity proportion. In fact, contrary to the popularity chart, the popularity proportion chart is biased towards years with fewer total songs. We can see that as the count of songs per year increases, the spread of data subsequently decreases. This leads to a phenomenon where a song with the same popularity would have a much higher popularity proportion in 1921 than in 2020. Nevertheless, we believe that popularity proportion is a fairer measure.
+
+```{r, echo = F, warning = F}
+standard= music2 %>% group_by(year) %>% mutate(count = n())%>%  ggplot()+ geom_point(aes(x = year, y = popularity, color = count)) + xlab("Years") + ylab("Popularity") + labs(title = "Popularity over 100 years") + theme(plot.title = element_text(size=11))
+
+new =music2 %>% group_by(year) %>% mutate(count = n()) %>% ungroup() %>% ggplot(aes(x = year, y = prop_pop, color = count)) + geom_point() + ylim(0, 0.13) + xlab("Years") + ylab("Popularity Proportion") + labs(title = "Popularity proportion over 100 years") + theme(plot.title = element_text(size=10))
+
+grid.arrange(new, standard, ncol=2) 
+
+```
+
+###  Variable description
+* **year**: The year the song was released
+* **decade**: The decade the song was released in. Aggregated data from year.
+* **Popularity**: Double vairable ranging from 1 to 100 based on number of streams and recency of streams. 
+* **pop_prop**: Proportion of popularity of song within a year. 
+* **valence**: Double variable ranging from 0 to 1. Measures the musical positiveness. Higher valence = more happy. 
+* **danceability**: Double variable ranging from 0 to 1. How danceable a song is based on rhythm, beat strength etc. 
+* **duration_min**: Duration of song in minutes.
+* **energy**: Double variable ranging from 0 to 1. Measures the intensity of a song. Ex: Rock songs have higher energy than classical music.
+* **explicit**: Binary variable being 0 or 1. 0 - non-explicit. 1 - explicit.
+* **instrumentalness**: Double variable ranging from 0 to 1. Measures the sound in music that is not vocal. Oppotsite of speechiness.
+* **liveness**: Double variable ranging from 0 to 1.Measures the presence of an audience in the recording. A track performed live will have a higher value than a studio recorded song.
+* **loudness**: Double variable measuring decibles of the song 
+* **speechiness**: Double variable ranging from 0 to 1. Measures presence of words in a track. Rap songs will have high speechiness. 
+* **tempo**: Double variable measuring beats per minute. 
+* **acousticness**: Double variable ranging from 0 to 1. How acoustic a song is, the lack of electric instruments. 
+
+
+# RESULTS
+
+## RESULT 1
+
+Our group decided that the best way to accurately asses whether music has changed over time was to analyze how the key characteristics of music has changed over time. Before modelling the change of music over time, we decided to assess the change by binning data in decades. The averages of each characteristic was evaluated for each decade. We did this so that the changes over time would be more obvious than if changes on a year to year basis were analyzed. Additionally, data was plotted ever 2 decades to further demonstrate the changes and avoid redundant data visualization. The only exception to this is the radar plot for 2010 which we felt was important since it was the most recent information. Below are radar plots displaying 6 variables. These 6 variables were chosen because they all have a range of 0 to 1 making it possible to evaluate on a radar plot without uneven axis. The outer bounds of the radar plot indicate a value closer to 1 while the center of the radar plot indicates a value of 0. 
+
+From the radar plot, we can see that acousticness has progressively gotten lower indicating a shift away from acoustic instruments throughout the decades. Our findings are supported by the fact that digital music production has become very popular recently. There is also a noticeable change in energy from 1920 to 2010 with energy significantly increasing. Such a change indicates that music today is much more intense than music in the past. It is possible that the birth of energetic genres such as rock and club music likely shifted attraction from more reserved genres such as classical music. What we found interesting was that danceability appeared to remain consistent throughout the century suggesting that songs have always been generally danceable. 
+
+
+```{r, fig.width = 8, warning = F, echo = F, message = F} 
+music.radar = music2 %>%
+   rbind(rep(0,22), rep(1,22)) %>% group_by(decade) %>% summarise( valence = mean(valence), acoust = mean(acousticness), speech = mean(speechiness),instrum = mean(instrumentalness), dance = mean(danceability), energy = mean(energy), liveness = mean(liveness))
+
+par(mfrow = c(2,3))
+
+i = 3
+music.radar$acousticness[3]
+
+while(i <= 12){
+temp = slice(music.radar, i, 1:2) %>% select(-decade) 
+radarchart(temp, maxmin = F, axistype = 2, centerzero = F, seg = 4, plwd = 2, cglty = 1, cglcol = "navy", cglwd = 1, title = music.radar$decade[i], vlcex = 1.3, palcex = 1.5)
+
+if(i < 10)
+{i = i +2}
+else{
+  i = i + 1
+}
+}
+```
+
+In order to reduce misinterpretations and misguiding visualizations, we decided to create a box plot to further demonstrate how music has changed. The box plots display the distribution of a song's musical characteristic for each decade. We found that a box plot would allow a more intricate analysis of the data as the mean alone is not enough to make a solid conclusion. The animated plot moves through 7 variables that were also plotted on the radar plot. 
+
+*Much like the radar plot, the median acoustics has greatly decreased; however what the radar plot failed to show is that the inter quartile range for the last 5 decades are very high which lead us to conclude that although acousticness has decreased over time, there is still great variation in later decades. This means that there is still plenty of music today with high acousticness. 
+* As previously mentioned, the energy of music has consistently increased which is supported by the box plot below. Much like acousticness however, the variation of energy has also increased over time suggesting not only an increase in energy but a more diverse range of music energy. 
+* According to the box plot, the interquartile range for instrumentalness has sharply decreased with the 3 most recent decades having extremely low spread of data. Additionally, the instrumentalness for longs has historically been low and appears to remain that way. What is particularly  strange about his distribution is the fact that speechiness has also been historically low with little distribution. Our group initially thought that instrumentalness and speechiness would demonstrate inverse distributions of each other based on what the variables represent. This however is not the case suggesting that instrumentalness does not necessarily go hand in hand with the inverse of speechiness.
+* Among the 7 variables plotted, livenss and danceability and valence have exhibited the most stable distribution. Based on these results, we can infer that high danceability and high valence have historically been staples of music. 
+
+```{r, echo = F, warning = F, message = F}
+music_dec = music2 %>%mutate(decade = as.character((year %/% 10)*10)) %>% select(decade, acousticness, instrumentalness, liveness, valence, danceability, energy, speechiness)
+
+meltData = melt(music_dec)
+ggplot(meltData, aes(x = decade, y = value, color = factor(variable))) +  geom_boxplot() + guides(color=guide_legend("Characteristics")) + xlab("Decades 1920 to 2010") + ylab("Distribution of Characteristic") +   labs(title = "How music changed for {closest_state} over time") + theme(plot.title = element_text(size=17)) + transition_states(
+    factor(variable),
+    transition_length = 10,
+    state_length = 20
+  ) +
+  enter_fade() + exit_shrink() + 
+  ease_aes('sine-in-out')
+
+```
+
+
+
+## Result 2 - Linear Models
+```{r, echo = F, warning = F, message = F}
+
+music.pop = music2 %>% group_by(year) %>% mutate(sum = sum(popularity), prop_pop = 100*(popularity/sum(popularity))) %>% ungroup()
+
+set.seed(919)
+music.sample= music.pop %>%
+        mutate(Set=sample(x = c("Train", "Test"), size = nrow(music.pop), replace = T, prob = c(0.8, 0.2)))
+
+train.music =filter(music.sample, Set =="Train")
+test.music =filter(music.sample,Set=="Test")
+
+RMSE.func = function(test){
+  test.rmse = sqrt(mean(test^2))
+  return (test.rmse)
+} 
+
+MAE.func = function(test){
+  test.mae = mean(abs(test))
+  return(test.mae)
+} 
+
+
+
+#19 comprehensive models
+
+#Preliminary modeling
+lm_val = lm(prop_pop ~ valence,data=train.music)
+lm_dance = lm(prop_pop ~ danceability,data=train.music)
+lm_dur = lm(prop_pop ~ duration_min,data=train.music)
+lm_nrg = lm(prop_pop ~ energy,data=train.music)
+lm_exp = lm(prop_pop ~ explicit,data=train.music)
+lm_inst = lm(prop_pop ~ instrumentalness,data=train.music)
+lm_live = lm(prop_pop ~ liveness,data=train.music)
+lm_loud = lm(prop_pop ~ loudness,data=train.music)
+lm_spch = lm(prop_pop ~ speechiness,data=train.music)
+lm_tmp = lm(prop_pop ~ tempo,data=train.music)
+lm_acous = lm(prop_pop ~ acousticness,data=train.music)
+
+#Secondary Modeling
+lm_a = lm(prop_pop ~ acousticness + energy,data=train.music)
+lm_b = lm(prop_pop ~ acousticness + speechiness,data=train.music)
+lm_c = lm(prop_pop ~ energy + speechiness,data=train.music)
+lm_d = lm(prop_pop ~ acousticness + instrumentalness,data=train.music)
+
+#Teritary modeling
+lm_e = lm(prop_pop ~ acousticness  + speechiness + instrumentalness + energy,data=train.music)
+lm_f = lm(prop_pop ~ speechiness + explicit + instrumentalness,data=train.music)
+lm_g = lm(prop_pop ~ acousticness  + danceability + tempo + valence + loudness + liveness+ energy,data=train.music)
+
+
+#Compiling residuals for each model
+music.residuals = test.music %>% 
+  add_residuals(lm_val, var = "lm1_resid") %>%
+  add_residuals(lm_dance, var = "lm3_resid") %>%
+  add_residuals(lm_dur, var = "lm4_resid") %>%
+  add_residuals(lm_nrg, var = "lm5_resid") %>%
+  add_residuals(lm_exp, var = "lm6_resid") %>%
+  add_residuals(lm_inst, var = "lm7_resid") %>%
+  add_residuals(lm_live, var = "lm8_resid") %>%
+  add_residuals(lm_loud, var = "lm9_resid") %>%
+  add_residuals(lm_spch, var = "lm10_resid") %>%
+  add_residuals(lm_tmp, var = "lm11_resid") %>%
+  add_residuals(lm_acous, var = "lm12_resid") %>%
+  add_residuals(lm_a, var = "lm13_resid") %>%
+  add_residuals(lm_b, var = "lm14_resid") %>%
+  add_residuals(lm_c, var = "lm15_resid") %>%
+  add_residuals(lm_d, var = "lm16_resid") %>%
+  add_residuals(lm_e, var = "lm17_resid") %>%
+  add_residuals(lm_f, var = "lm18_resid") %>%
+  add_residuals(lm_g, var = "lm19_resid") 
+
+
+#Compiling RMSE and MAE for residuals in linear models
+RMSE_compile1 = tibble(
+mod_val = RMSE.func(music.residuals$lm1_resid),
+mod_dance = RMSE.func(music.residuals$lm3_resid),
+mod_dur = RMSE.func(music.residuals$lm4_resid),
+mod_nrg = RMSE.func(music.residuals$lm5_resid),
+mod_exp = RMSE.func(music.residuals$lm6_resid),
+mod_inst = RMSE.func(music.residuals$lm7_resid),
+mod_live = RMSE.func(music.residuals$lm8_resid),
+mod_loud = RMSE.func(music.residuals$lm9_resid),
+mod_spch = RMSE.func(music.residuals$lm10_resid),
+mod_tmp = RMSE.func(music.residuals$lm11_resid),
+mod_acous = RMSE.func(music.residuals$lm12_resid),
+mod_acyr = RMSE.func(music.residuals$lm13_resid),
+mod_yrex = RMSE.func(music.residuals$lm14_resid),
+mod_yrda = RMSE.func(music.residuals$lm15_resid),
+mod_acda = RMSE.func(music.residuals$lm16_resid),
+mod_full = RMSE.func(music.residuals$lm17_resid),
+mod_lyr = RMSE.func(music.residuals$lm18_resid),
+mod_upbeat = RMSE.func(music.residuals$lm19_resid))
+
+RMSE_compile2 = tibble(
+mod_val = MAE.func(music.residuals$lm1_resid),
+mod_dance = MAE.func(music.residuals$lm3_resid),
+mod_dur = MAE.func(music.residuals$lm4_resid),
+mod_nrg = MAE.func(music.residuals$lm5_resid),
+mod_exp = MAE.func(music.residuals$lm6_resid),
+mod_inst = MAE.func(music.residuals$lm7_resid),
+mod_live = MAE.func(music.residuals$lm8_resid),
+mod_loud = MAE.func(music.residuals$lm9_resid),
+mod_spch = MAE.func(music.residuals$lm10_resid),
+mod_tmp = MAE.func(music.residuals$lm11_resid),
+mod_acous = MAE.func(music.residuals$lm12_resid),
+mod_acyr = MAE.func(music.residuals$lm13_resid),
+mod_yrex = MAE.func(music.residuals$lm14_resid),
+mod_yrda = MAE.func(music.residuals$lm15_resid),
+mod_acda = MAE.func(music.residuals$lm16_resid),
+mod_full = MAE.func(music.residuals$lm17_resid),
+mod_lyr = MAE.func(music.residuals$lm18_resid),
+mod_upbeat = MAE.func(music.residuals$lm19_resid)
+)
+
+RMSE_compile3 = gather(RMSE_compile1, "model", "RMSE", 1:ncol(RMSE_compile1))
+RMSE_compile4 = gather(RMSE_compile2, "model", "MAE", 1:ncol(RMSE_compile2))
+
+error = merge(RMSE_compile3, RMSE_compile4, sort = F)
+error_final_rmse = error %>% arrange(RMSE) 
+error_final_mae = error %>% arrange(MAE) 
+
+
+```
+
+For our second questions, we wanted to investigate if a musical characteristic or a combination of musical characteristics could predict the popularity proportion of a song. Based on the results from the previous question, we were particularly interested in whether energy would be a better predictor for popularity proportion since songs typically became more energetic over time. We believe that a favorable musical characteristic might be associated with popularity. 
+
+Below are 18 models that were comprehensively constructed in three stages. The preliminary stage of modeling consisted of 1 variable predictors for popularity proportion. The only conditions that the preliminary variables had to satisfy was the condition that they had to be numeric variables. Our group did not decide to use any aspect of song name or artist name in the predictions because there was no correlation. Additioanlly, we decided to exclude the year variable as a predictor since it has already been mentioned that there is a somewhat biased relationship between popularity proportion and year. The first 11 models are as follows:
+
+* lm_val = lm(prop_pop ~ valence,data=train.music)
+* lm_dance = lm(prop_pop ~ danceability,data=train.music)
+* lm_dur = lm(prop_pop ~ duration_min,data=train.music)
+* lm_nrg = lm(prop_pop ~ energy,data=train.music)
+* lm_exp = lm(prop_pop ~ explicit,data=train.music)
+* lm_inst = lm(prop_pop ~ instrumentalness,data=train.music)
+* lm_live = lm(prop_pop ~ liveness,data=train.music)
+* lm_loud = lm(prop_pop ~ loudness,data=train.music)
+* lm_spch = lm(prop_pop ~ speechiness,data=train.music)
+* lm_tmp = lm(prop_pop ~ tempo,data=train.music)
+* lm_acous = lm(prop_pop ~ acousticness,data=train.music)
+
+Below are the RMSE and MAE for each variable
+```{r, results="asis", echo = F, warning = F}
+error_initial_rmse = error %>% slice(1:11) %>% arrange(RMSE)
+error_initial_mae = error %>% slice(1:11) %>% arrange(MAE)
+
+kbl(head(error_initial_rmse), caption = "Top 5 Initial RMSE models") %>%
+  kable_paper("striped", full_width = F) %>%
+  row_spec(1:2, bold = T, color = "white", background = "green")
+
+
+kbl(head(error_initial_mae), caption = "Top 5 Initial MAE models") %>%
+  kable_paper("striped", full_width = F) %>%
+  row_spec(1:2, bold = T, color = "white", background = "green")
+```
+Based on the results from the RMSE and MAE table, 4 variables were chosen for further investigation in the second round. The secondary models are as follows:
+
+* lm_a = lm(prop_pop ~ acousticness + energy,data=train.music)
+* lm_b = lm(prop_pop ~ acousticness + speechiness,data=train.music)
+* lm_c = lm(prop_pop ~ energy + speechiness,data=train.music)
+* lm_d = lm(prop_pop ~ acousticness + instrumentalness,data=train.music)
+
+
+The lack of significant results from the second round of modelling lead our group to attempt models that fit a certain catagory. 
+The models for the third round of modeling is as follows:
+
+* lm_e = lm(prop_pop ~ acousticness  + speechiness + instrumentalness + energy,data=train.music)
+* lm_f = lm(prop_pop ~ speechiness + explicit + instrumentalness,data=train.music)
+* lm_g = lm(prop_pop ~ acousticness  + danceability + tempo + valence + loudness + liveness + energy,data=train.music)
+
+**Model-e** was based on all of the 4 significant variables from the first round. **Model-f** was consisted of variables that were associated with the speechiness of a song. We believe that the explicit and instrumentalness variables share a relation with speechiness. **Model-g** consisted of predictors that were associated with the energy and how upbeat a song is. 
+
+Below are the top 5 models according to RMSE and MAE respectively.
+```{r, echo = F, warning = F}
+kbl(head(error_final_rmse), caption = "Top 5 final RMSE models") %>%
+  kable_paper("striped", full_width = F) %>%
+  row_spec(1, bold = T, color = "white", background = "green")
+```
+
+```{r, echo = F, warning = F}
+kbl(head(error_final_mae), caption = "Top 5 final MAE models") %>%
+  kable_paper("striped", full_width = F) %>%
+  row_spec(1, bold = T, color = "white", background = "green")
+
+```
+The top models for according to RMSE and MAE were rather unexpected. Not a single model was shared by the two methods of error so our group decided to compare the top models of each by applying a prediction to the testing data set. Two point plots were created for each model with a line of slope = 1 as reference for a perfect prediction. The line does not appear to be at a 45 degree angle because the y-axis and x-axis do not share the name bounds. Unfortunately, based on the graphs below, neither model appears to adequately predict popularity proportion. For the sake of comparison, the Upbeat model appears to at least so a slightly better job predicting the data as the distribution of points appears to be more aligned with the 45 degree angle line. 
+
+
+```{r, echo = F, warning = F}
+#Predictions for Speechiness vs pop_proportion and upbeat vs pop_proportion
+music.predictions = test.music %>% 
+  add_predictions(lm_g, var = "Upbeat.model") %>%
+  add_predictions(lm_spch, var = "Speechiness.model") %>% select(prop_pop, Upbeat.model, Speechiness.model)
+
+new = gather(music.predictions, model, prediction, 2:3)
+
+new %>% ggplot(aes(x = prop_pop, y = prediction, color = model)) + geom_point() +xlim(0,2)+ ylim(0,0.08)  + geom_abline(slope = 1) + facet_wrap(~model) + labs(title = "Upbeat model versus Speechiness model for popularity proportion", x = "Popularity Proportion", y = "Predicted Popularity Proportion") + theme(plot.title = element_text(size=12))
+```
+## Result 2 - Lasso Model
+
+```{r, echo = F, warning = F, message = F}
+music = read.csv("C:/Users/varun/Downloads/music.csv")
+music = music %>%
+  na.omit() %>% select(valence, year, artists, danceability, duration_ms, energy, explicit, loudness, popularity, instrumentalness, name, popularity, release_date, tempo, name, speechiness) %>% mutate(release_year = substr(release_date, 1,4)) %>% select(-release_date) %>% mutate(artist = str_replace_all(artists, pattern="\\[|\\]", replacement="")) %>% mutate(release_year = as.integer(release_year), duration_min = duration_ms/60000) %>% group_by(year) %>% mutate(pop_prop = 100*as.numeric(proportions(popularity))) %>% ungroup() %>% select(-artists)
+```
+
+```{r, echo = F, warning = F, message = F}
+set.seed(3456)
+indexes = sample(1:nrow(music), 0.7*nrow(music))
+music_train = music[indexes,] 
+music_test = music[-indexes,]
+
+X_train = music_train %>% select(-artist, -name, -pop_prop, -popularity) %>% data.matrix()
+y_train = music_train %>% select(pop_prop) %>% unlist()
+X_test = music_test %>% select(-artist, -name, -pop_prop, -popularity) %>% data.matrix()
+y_test = music_test %>% select(pop_prop) %>% unlist()
+```
+
+```{r, echo = F, warning = F, message = F}
+preprocessing = preProcess(X_train, method = c("center","scale"))
+transformed_train = predict(preprocessing, X_train)
+```
+
+```{r, echo = F, warning = F, message = F}
+lasso_cv = cv.glmnet(transformed_train, y_train, alpha = 1, nfolds=5)
+lambda.lasso = lasso_cv$lambda.1se
+```
+
+```{r, echo = F, warning = F, message = F, message = F}
+transformed_test = predict(preprocessing, X_test)
+
+lasso.predictions = predict(lasso_cv, s='lambda.1se', newx=transformed_test)
+
+
+cat("The optmal lasso lambda parameter is: " , lambda.lasso)
+
+plot(x=lasso.predictions,y=y_test, main = "Lasso model prediction on Popularity Proportion ", xlab = "Lasso Prediction", ylab = "Actual Popularity")
+```
+  We also attempted to fit a LASSO regression model to predict proportion popularity. The data used an 70/30 train/test split to obtain the optimal value of lambda for the model. Using a LASSO model would allow us to perform feature selection, which is helpful as we were unsure which variables really had an impact on the popularity. While the model did report low RMSE values of 0.001578572 , such a small value is not indicative of a good model since the dependent variable is on the closed interval zero to one. The model only had an intercept, with all other predictors converged to zero. We found thathe LASSO model is very rigid in its predictions and thus not effective at predicting popularity. 
+
+
+
+# CONCLUSION
+
+Our analysis of the Spotify dataset attempted to answer two questions. First we looked at how music has changed over time. We found that acousticness, speechiness, and  instrumentalness have decreased over the past 100 years, and energy has increased over the years. Other variables featured little to no change. So the components of music have changed with time, but to a varying degree for individual elements. At the time of our group investigating the dataset, the typical song will likely have: very low instrumentalness; low acousticness, liveliness, and speechiness; moderate valence; and high danceability and energy. Given how music has tended to move away from acoustic instruments to production using software, the trends we saw in the different predictors reflect that shift. While there has been a clear change in genres over the past century, knowing the specifics of what a genre change means can tell us about future trends in music. Diving deeper into this data, one could possibly predict how the next generation of music will differ from previous ones. 
+
+The other question we attempted to answer was whether we could predict the popularity of a song as a proportion of total popularity. Our models were not able to predict a song’s popularity effectively. We tried regression models of varying complexity ranging from one to all predictors present, as well as introducing LASSO regularization. While we did achieve low RMSE and MAE, the small values are expected since the dependent variable is also on a small scale (0,1). Plots of residuals and actual vs. predicted values indicate we consistently predicted popularity incorrectly. Given the opportunity to explore more, we would like to try predicting popularity using more complex models such as a forest model or neural network. Doing so would give us the opportunity to learn from previous mistakes in the case of the former, and capture interactions between predictors in the latter. Being able to predict how popular a song is would be valuable in any context, especially to a company like Spotify who makes its revenue by providing music to its subscribers. A popular song will yield more revenue, and having a model that can accurately predict a song’s popularity could act as a potential screening for which songs are fit for the streaming platform. We also recognize that since the popularity of each song is based on the current popularity, we cannot draw strong conclusions from it since popularity will favor newer music. We would like to investigate predicting valence in the future, as that value’s scale is not explicitly based on year like popularity is.
+
+These questions have very real application to the music and streaming industries. If we can discern and predict the sound of music, as well as predict the popularity of a song, streaming services and artists can better streamline the process of making and distributing music. While it is excellent for consumers that there are millions upon millions of songs available at our fingertips, a company like Spotify will surely want to promote the more popular songs to listeners since those will gross more. Having the knowledge to determine what kind of music will be produced in the future, as well as knowing if a song has the factors to potentially become popular before it is released to the public, could make Spotify an even more profitable and efficient institution. 
+
+
+
+
+
+
+
+
